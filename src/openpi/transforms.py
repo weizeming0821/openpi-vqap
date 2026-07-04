@@ -136,13 +136,13 @@ class Normalize(DataTransformFn):
 
     def _normalize(self, x, stats: NormStats):
         mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
-        return (x - mean) / (std + 1e-6)
+        return _cast_like_dtype((x - mean) / (std + 1e-6), x)
 
     def _normalize_quantile(self, x, stats: NormStats):
         assert stats.q01 is not None
         assert stats.q99 is not None
         q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
-        return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        return _cast_like_dtype((x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0, x)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,15 +170,18 @@ class Unnormalize(DataTransformFn):
     def _unnormalize(self, x, stats: NormStats):
         mean = pad_to_dim(stats.mean, x.shape[-1], axis=-1, value=0.0)
         std = pad_to_dim(stats.std, x.shape[-1], axis=-1, value=1.0)
-        return x * (std + 1e-6) + mean
+        return _cast_like_dtype(x * (std + 1e-6) + mean, x)
 
     def _unnormalize_quantile(self, x, stats: NormStats):
         assert stats.q01 is not None
         assert stats.q99 is not None
         q01, q99 = stats.q01, stats.q99
         if (dim := q01.shape[-1]) < x.shape[-1]:
-            return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
-        return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+            return _cast_like_dtype(
+                np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1),
+                x,
+            )
+        return _cast_like_dtype((x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -418,6 +421,19 @@ def apply_tree(
                 raise ValueError(f"Selector key {k} not found in tree")
 
     return unflatten_dict({k: transform(k, v) for k, v in tree.items()})
+
+
+def _cast_like_dtype(value, like):
+    """Keep transform outputs in the same dtype family as the input array/tensor."""
+    if not hasattr(like, "dtype"):
+        return value
+    if isinstance(value, np.ndarray):
+        return value.astype(like.dtype, copy=False)
+    if hasattr(value, "to"):
+        return value.to(dtype=like.dtype)
+    if hasattr(value, "astype"):
+        return value.astype(like.dtype)
+    return value
 
 
 def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:
