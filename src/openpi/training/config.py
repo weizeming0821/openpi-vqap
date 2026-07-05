@@ -91,6 +91,10 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # Optional subset of LeRobot episode ids used for smoke tests or debugging.
+    # When empty, the full split is loaded.
+    episode_indices: tuple[int, ...] = ()
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -367,6 +371,8 @@ class LeRobotRLBenchDataConfig(DataConfigFactory):
 
     # RLBench LeRobot uses the raw action column name "action".
     action_sequence_keys: Sequence[str] = ("action",)
+    # Optional subset of episodes for smoke tests.
+    episode_indices: tyro.conf.Suppress[tuple[int, ...]] = ()
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -399,6 +405,7 @@ class LeRobotRLBenchDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+            episode_indices=self.episode_indices,
         )
 
 
@@ -841,6 +848,64 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
+    ),
+    TrainConfig(
+        name="pi05_rlbench_pt",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+        ),
+        data=LeRobotRLBenchDataConfig(
+            repo_id="train",
+            assets=AssetsConfig(assets_dir="./assets/pi05_rlbench"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=30_000,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        name="pi05_rlbench_pt_smoke",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+            pytorch_compile_mode=None,
+        ),
+        data=LeRobotRLBenchDataConfig(
+            repo_id="train",
+            assets=AssetsConfig(assets_dir="./assets/pi05_rlbench"),
+            base_config=DataConfig(prompt_from_task=True),
+            episode_indices=tuple(range(8)),
+        ),
+        batch_size=8,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=1,
+        log_interval=1,
+        save_interval=1,
+        wandb_enabled=False,
     ),
     #
     # Fine-tuning Aloha configs.
