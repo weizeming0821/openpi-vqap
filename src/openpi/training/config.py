@@ -874,6 +874,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
         num_train_steps=30_000,
+        save_interval=500,
         wandb_enabled=False,
     ),
     TrainConfig(
