@@ -878,6 +878,37 @@ _CONFIGS = [
         wandb_enabled=False,
     ),
     TrainConfig(
+        # delta 动作空间版本：数据由 convert 脚本以 --action-repr delta --action-stride k
+        # --prompt-strategy random 生成到 repo_id=train_delta；norm stats 需重新计算到
+        # assets/pi05_rlbench_delta（动作分布完全不同，绝不能复用旧 stats）。
+        name="pi05_rlbench_delta_pt",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+        ),
+        data=LeRobotRLBenchDataConfig(
+            repo_id="train_delta",
+            assets=AssetsConfig(assets_dir="./assets/pi05_rlbench_delta"),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=30_000,
+        save_interval=500,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
         name="pi05_rlbench_pt_smoke",
         model=pi0_config.Pi0Config(
             pi05=True,
