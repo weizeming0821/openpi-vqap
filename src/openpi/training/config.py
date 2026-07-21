@@ -409,6 +409,35 @@ class LeRobotRLBenchDataConfig(DataConfigFactory):
         )
 
 
+# RLBench Seen/UnSeen 划分（Exp_Design.md §1.1）：M0/M1 只在 12 个 Seen 任务上训练，
+# 6 个 UnSeen 任务（insert_onto_square_peg / meat_off_grill / put_item_in_drawer /
+# put_money_in_safe / stack_cups / turn_tap）不参与训练，仅用于 Exp2 评测。
+# episode 区间 [start, stop) 依据 LeRobot_RLBench_Dataset/train_delta/.conversion_progress.jsonl，
+# 已核验每个任务恰好占据连续 100 个 episode 且全局无缝覆盖 0..1799。
+# ⚠ 若重新转换数据集，episode 顺序可能变化，必须重新核验此映射
+#   （tools/check_seen12_dataloader.py 会做运行时断言）。
+RLBENCH_SEEN12_EPISODE_RANGES: dict[str, tuple[int, int]] = {
+    "put_groceries_in_cupboard": (0, 100),
+    "light_bulb_in": (300, 400),
+    "slide_block_to_target": (400, 500),
+    "place_shape_in_shape_sorter": (500, 600),
+    "stack_blocks": (600, 700),
+    "sweep_to_dustpan": (800, 900),
+    "close_jar": (1000, 1100),
+    "reach_and_drag": (1100, 1200),
+    "open_drawer": (1400, 1500),
+    "place_cups": (1500, 1600),
+    "stack_wine": (1600, 1700),
+    "push_buttons": (1700, 1800),
+}
+RLBENCH_SEEN12_EPISODE_INDICES: tuple[int, ...] = tuple(
+    index
+    for start, stop in sorted(RLBENCH_SEEN12_EPISODE_RANGES.values())
+    for index in range(start, stop)
+)
+assert len(RLBENCH_SEEN12_EPISODE_INDICES) == 1200, "Seen12 应恰好覆盖 12×100=1200 个 episode"
+
+
 @dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
@@ -892,6 +921,46 @@ _CONFIGS = [
             repo_id="train_delta",
             assets=AssetsConfig(assets_dir="./assets/pi05_rlbench_delta"),
             base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=30_000,
+        save_interval=500,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        # M0（Exp_Design.md §1.3）：只在 12 个 Seen 任务上做 delta 微调。
+        # 与 pi05_rlbench_delta_pt 的差异仅两处：
+        # 1) episode_indices 在线过滤出 Seen12（不重建数据集，见 Exp_Design.md §1.4.1）；
+        # 2) asset_id="train_delta_seen12" —— 必须设！否则训练会按 repo_id 静默加载
+        #    全量 18 任务的 norm stats（assets/pi05_rlbench_delta/train_delta），
+        #    造成 UnSeen 统计泄漏。compute_norm_stats 会输出到
+        #    assets/pi05_rlbench_delta_seen12_pt/train_delta，需手工移到
+        #    assets/pi05_rlbench_delta/train_delta_seen12（与旧流程一致）。
+        name="pi05_rlbench_delta_seen12_pt",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+        ),
+        data=LeRobotRLBenchDataConfig(
+            repo_id="train_delta",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_rlbench_delta",
+                asset_id="train_delta_seen12",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            episode_indices=RLBENCH_SEEN12_EPISODE_INDICES,
         ),
         batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
