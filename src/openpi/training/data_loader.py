@@ -138,13 +138,32 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    # 注意：这里不能把 episode 子集传给 LeRobotDataset(episodes=...)。
+    # lerobot 0.1.0 的 bug：episodes 子集模式下 episode_data_index 按选中顺序压缩
+    # （size=len(episodes)），但 __getitem__/_get_query_indices 用数据行里的原始
+    # episode_index 去索引它 —— 原始 id >= len(episodes) 时 IndexError，
+    # 原始 id < len(episodes) 时会静默取到其它 episode 的动作窗口（跨集污染）。
+    # 因此改为加载全量数据集（episode_data_index 全局一致、动作窗口在各自 episode 内
+    # 计算，行为正确），再用帧级 Subset 限制可采样的行。
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
-        episodes=data_config.episode_indices or None,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
     )
+    if data_config.episode_indices:
+        episode_from = dataset.episode_data_index["from"]
+        episode_to = dataset.episode_data_index["to"]
+        num_episodes = len(episode_from)
+        bad = [ep for ep in data_config.episode_indices if ep < 0 or ep >= num_episodes]
+        if bad:
+            raise ValueError(f"episode_indices out of range [0, {num_episodes}): {bad[:10]}")
+        frame_indices = [
+            row
+            for ep in sorted(data_config.episode_indices)
+            for row in range(int(episode_from[ep]), int(episode_to[ep]))
+        ]
+        dataset = torch.utils.data.Subset(dataset, frame_indices)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
