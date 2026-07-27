@@ -978,6 +978,50 @@ _CONFIGS = [
         wandb_enabled=False,
     ),
     TrainConfig(
+        # ===== B 修复实验(rotraw): 修复 action 旋转维(rot6d)的病态归一化 =====
+        # 诊断结论(2026-07-27): 位置(xyz)预测准(~1cm),但旋转(rot6d)预测差(难任务误差
+        # 0.035-0.05,是对照的 3-10x)且多训不改善(21.5k≈30k)。根因: action 的 delta 旋转
+        # 多为近单位,r6d_0/r6d_3 分位数范围仅~0.02 → 归一化放大 ~100x → 抓取姿态映射到
+        # ±60-70,远超 pi0.5 flow-matching 动作头的 ~[-1,1] 输出范围 → 头产不出 → 抓取失败。
+        # TAVP(PerAct/RVT)用离散旋转分类规避此问题;我们在连续框架内的对策=不归一化旋转。
+        #
+        # 实现(零共享代码改动,完全隔离可回退): 用独立 norm stats
+        # assets/pi05_rlbench_delta/train_delta_seen12_rotraw —— 其 action rot6d 维(3-8)
+        # q01=-1,q99=1(mean=0,std=1)→ 归一化/反归一化对这些维恒等,rot6d 保持天然 [-1,1]。
+        # 其余(xyz/grip/整个 state)与 seen12 完全一致。回退=删本 config + 该 stats 目录 +
+        # checkpoints/tensorboard/log 的 *_rotraw_train。原 M0(seen12,step30000)完全不受影响。
+        name="pi05_rlbench_delta_seen12_rotraw_pt",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+            discrete_state_input=False,
+        ),
+        data=LeRobotRLBenchDataConfig(
+            repo_id="train_delta",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_rlbench_delta",
+                asset_id="train_delta_seen12_rotraw",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+            episode_indices=RLBENCH_SEEN12_EPISODE_INDICES,
+        ),
+        batch_size=32,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=30_000,
+        save_interval=500,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
         name="pi05_rlbench_pt_smoke",
         model=pi0_config.Pi0Config(
             pi05=True,
