@@ -21,6 +21,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.rlbench_policy as rlbench_policy
+import openpi.policies.rlbench_waypoint_policy as rlbench_waypoint_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -406,6 +407,49 @@ class LeRobotRLBenchDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
             episode_indices=self.episode_indices,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRLBenchWaypointDataConfig(DataConfigFactory):
+    """Data config for the RLBench sparse-waypoint pi0.5 dataset (ATTEMPTS_LOG 尝试3).
+
+    动作空间 absolute_rotvec7 (h=1)，稀疏关键帧 + 规划器执行范式。数据集列名
+    front_image / left_shoulder_image / right_shoulder_image / state(7) / actions(7)。
+    相机映射与参考 rlbench-pi05-waypoint-baseline 一致：front->base_0_rgb、
+    left_shoulder->left_wrist_0_rgb、right_shoulder->right_wrist_0_rgb。
+    """
+
+    # Waypoint LeRobot 数据集的动作列名是 "actions"。
+    action_sequence_keys: Sequence[str] = ("actions",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/front_image": "front_image",
+                        "observation/left_shoulder_image": "left_shoulder_image",
+                        "observation/right_shoulder_image": "right_shoulder_image",
+                        "observation/state": "state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+        data_transforms = _transforms.Group(
+            inputs=[rlbench_waypoint_policy.RlbenchWaypointInputs(model_type=model_config.model_type)],
+            outputs=[rlbench_waypoint_policy.RlbenchWaypointOutputs()],
+        )
+        model_transforms = ModelTransformFactory()(model_config)
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
         )
 
 
@@ -1019,6 +1063,45 @@ _CONFIGS = [
         pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
         num_train_steps=30_000,
         save_interval=500,
+        wandb_enabled=False,
+    ),
+    TrainConfig(
+        # ===== Waypoint POC(ATTEMPTS_LOG 尝试3)：稀疏关键帧 + 规划器范式 =====
+        # dense 逐帧微调天花板仅 ~6% → 换 waypoint。数据集 poc4_pi05_waypoint_h1
+        # (4 任务 POC, absolute_rotvec7, h=1, L=10 加密关键帧, 3780 帧)。
+        # 配方参照 source/rlbench-pi05-waypoint-baseline: batch 128(global) / warmup 10k /
+        # peak_lr 5e-5 / 20k 步。ema_decay=None(本仓 PyTorch trainer 不支持 ema)。
+        # ⚠ 训练启动须 HF_LEROBOT_HOME=/data0/weizeming/VQAP/LeRobot_RLBench_Waypoint(独立数据集根)。
+        # 回退=删本 config 块 + assets/pi05_rlbench_waypoint + rlbench_waypoint_policy.py +
+        #   LeRobot_RLBench_Waypoint + checkpoints|tensorboard|log 的 *waypoint_poc4*。
+        name="pi05_rlbench_waypoint_h1_poc4_pt",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=1,
+            discrete_state_input=False,
+        ),
+        data=LeRobotRLBenchWaypointDataConfig(
+            repo_id="poc4_pi05_waypoint_h1",
+            assets=AssetsConfig(
+                assets_dir="./assets/pi05_rlbench_waypoint",
+                asset_id="poc4_waypoint",
+            ),
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=128,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=20_000,
+        save_interval=2_000,
         wandb_enabled=False,
     ),
     TrainConfig(
