@@ -1069,8 +1069,9 @@ _CONFIGS = [
         # ===== Waypoint POC(ATTEMPTS_LOG 尝试3)：稀疏关键帧 + 规划器范式 =====
         # dense 逐帧微调天花板仅 ~6% → 换 waypoint。数据集 poc4_pi05_waypoint_h1
         # (4 任务 POC, absolute_rotvec7, h=1, L=10 加密关键帧, 3780 帧)。
-        # 配方参照 source/rlbench-pi05-waypoint-baseline: batch 128(global) / warmup 10k /
-        # peak_lr 5e-5 / 20k 步。ema_decay=None(本仓 PyTorch trainer 不支持 ema)。
+        # 优化配方沿用我们原先 dense M0 的配方(batch 32 / warmup 1000 / peak_lr 2.5e-5 /
+        # 30k 步 / cosine decay)——唯一 waypoint 特有的差异是 action_horizon=1、数据集、
+        # DataConfig、assets。ema_decay=None(本仓 PyTorch trainer 不支持 ema)。
         # ⚠ 训练启动须 HF_LEROBOT_HOME=/data0/weizeming/VQAP/LeRobot_RLBench_Waypoint(独立数据集根)。
         # 回退=删本 config 块 + assets/pi05_rlbench_waypoint + rlbench_waypoint_policy.py +
         #   LeRobot_RLBench_Waypoint + checkpoints|tensorboard|log 的 *waypoint_poc4*。
@@ -1089,19 +1090,19 @@ _CONFIGS = [
             ),
             base_config=DataConfig(prompt_from_task=True),
         ),
-        batch_size=128,
+        batch_size=32,
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/data0/weizeming/VQAP/openpi_cache/openpi-assets/checkpoints/pi05_base_pytorch",
-        num_train_steps=20_000,
-        save_interval=2_000,
+        num_train_steps=30_000,
+        save_interval=500,
         wandb_enabled=False,
     ),
     TrainConfig(
